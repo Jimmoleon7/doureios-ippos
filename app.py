@@ -816,7 +816,13 @@ function handleConsent(approved) {
     addSystemMessage('<span class="green">✓ Εξουσιοδότηση επιβεβαιώθηκε. Εκτελώ...</span>');
     showTyping();
     document.getElementById('sendBtn').disabled = true;
-    socket.emit('consent_response', { approved: true, action: pendingConsent.action });
+    socket.emit('consent_response', {
+      approved: true,
+      action: pendingConsent.action,
+      target: pendingConsent.target || '',
+      msf_intent: pendingConsent.msf_intent || '',
+      scan_choice: pendingConsent.scan_choice || 1,
+    });
   } else {
     addSystemMessage('<span class="red">✗ Ακυρώθηκε.</span>');
     socket.emit('consent_response', { approved: false });
@@ -1237,6 +1243,9 @@ def handle_consent(data):
 
     action = data.get('action', '')
     result = data.get('result', {})
+    # Preserve target from consent data
+    if 'target' not in data or not data.get('target'):
+        data['target'] = session_data.get('last_target', '')
 
     # Re-detect from stored session if needed
     # Execute in background thread

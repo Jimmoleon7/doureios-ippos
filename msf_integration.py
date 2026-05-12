@@ -52,7 +52,7 @@ def run_msf_command(commands: list, timeout: int = 120) -> str:
         result = subprocess.run(
             ["msfconsole", "-q", "-x", cmd_str],
             capture_output=True, text=True,
-            timeout=timeout
+            timeout=300
         )
         output = result.stdout + result.stderr
         # Clean up MSF banner/noise
