@@ -770,8 +770,17 @@ socket.on('scan_output', data => {
 });
 
 socket.on('report_ready', data => {
+  hideTyping();
+  document.getElementById('sendBtn').disabled = false;
   addSystemMessage(`📄 <span class="green">Report δημιουργήθηκε!</span><br><a href="/download_report?path=${encodeURIComponent(data.path)}" target="_blank" style="color:var(--cyan)">⬇ Κατέβασε: ${data.filename}</a>`);
   socket.emit('get_reports');
+});
+
+// ── SCAN OPTIONS ──
+socket.on('scan_options', data => {
+  hideTyping();
+  document.getElementById('sendBtn').disabled = false;
+  addScanOptions(data);
 });
 
 socket.on('reports_list', data => {
@@ -801,6 +810,35 @@ function handleConsent(approved) {
 }
 
 // ── UI HELPERS ──
+
+function addScanOptions(data) {
+  const time = new Date().toLocaleTimeString('el-GR', {hour:'2-digit', minute:'2-digit'});
+  const opts = data.options.map((o,i) => 
+    `<button class="quick-cmd" style="margin:4px 0;width:100%;text-align:left" 
+      onclick="selectScanOption(${i+1}, '${escHtml(data.action)}', '${escHtml(data.target||'')}')">
+      <span style="color:var(--gold);margin-right:8px">${i+1}</span> ${o}
+    </button>`
+  ).join('');
+  appendMsg(`
+    <div class="msg system clarify">
+      <div class="msg-avatar">🐴</div>
+      <div>
+        <div class="msg-bubble">
+          <strong>${data.title}</strong><br><br>${opts}
+        </div>
+        <div class="msg-time">${time}</div>
+      </div>
+    </div>`);
+}
+
+function selectScanOption(choice, action, target) {
+  document.querySelectorAll('.msg.system.clarify:last-child').forEach(el => el.style.opacity='0.5');
+  addUserMessage(`Επιλογή ${choice}`);
+  showTyping();
+  document.getElementById('sendBtn').disabled = true;
+  socket.emit('scan_option_selected', { choice, action, target });
+}
+
 function addUserMessage(text) {
   const time = new Date().toLocaleTimeString('el-GR', {hour:'2-digit', minute:'2-digit'});
   appendMsg(`
@@ -1025,9 +1063,32 @@ def handle_message(data):
         else:
             emit('system_message', {'message': 'Δεν υπάρχει scan output για report. Κάνε πρώτα μια σάρωση!'})
 
-    elif intent_id in ('nmap_scan', 'vuln_scan', 'web_scan', 'sql_inject',
-                        'password_attack', 'wifi_attack', 'packet_capture',
-                        'recon_dns', 'smb_enum'):
+    elif intent_id == 'nmap_scan':
+        # Show scan type options first (like terminal mode)
+        emit('scan_options', {
+            'action': 'nmap_scan',
+            'target': target,
+            'title': f'🔍 Τι είδους σάρωση θέλεις για <span class="cyan">{target or "localhost"}</span>;',
+            'options': [
+                'Γρήγορη — top 100 ports',
+                'Κανονική — top 1000 ports + service detection',
+                'Πλήρης — όλα τα ports + OS detection',
+                'Vulnerability scan — nmap vuln scripts',
+            ]
+        })
+    elif intent_id == 'web_scan':
+        emit('scan_options', {
+            'action': 'web_scan',
+            'target': target,
+            'title': f'🌐 Τι είδους web scan θέλεις για <span class="cyan">{target}</span>;',
+            'options': [
+                'Nikto — web vulnerability scan',
+                'Gobuster — directory brute-force',
+                'Και τα δύο',
+            ]
+        })
+    elif intent_id in ('vuln_scan', 'sql_inject', 'password_attack',
+                        'wifi_attack', 'packet_capture', 'recon_dns', 'smb_enum'):
         # Request consent first
         intent = result['intent']
         desc = intent[f'description_{lang}'] if intent else intent_id
@@ -1214,6 +1275,36 @@ def get_help_html(lang='el'):
 # ─────────────────────────────────────────────────────────────
 #  ENTRY POINT
 # ─────────────────────────────────────────────────────────────
+
+@socketio.on('scan_option_selected')
+def handle_scan_option(data):
+    choice = int(data.get('choice', 1))
+    action = data.get('action', 'nmap_scan')
+    target = data.get('target', 'localhost') or 'localhost'
+
+    # Map choice to description
+    if action == 'nmap_scan':
+        descriptions = [
+            'Γρήγορη σάρωση (top 100 ports)',
+            'Κανονική σάρωση (top 1000 + services)',
+            'Πλήρης σάρωση (όλα τα ports + OS)',
+            'Vulnerability scan',
+        ]
+    elif action == 'web_scan':
+        descriptions = ['Nikto scan', 'Gobuster directory scan', 'Nikto + Gobuster']
+    else:
+        descriptions = [f'Ενέργεια {choice}']
+
+    desc = descriptions[choice-1] if choice <= len(descriptions) else descriptions[0]
+
+    emit('consent_required', {
+        'action': action,
+        'target': target,
+        'description': desc,
+        'scan_choice': choice,
+        'result': {},
+    })
+
 def run_gui(host='127.0.0.1', port=5000, debug=False):
     import webbrowser
     import time
