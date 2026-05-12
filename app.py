@@ -19,6 +19,9 @@ from flask_socketio import SocketIO, emit
 sys.path.insert(0, str(Path(__file__).parent))
 from nlp_engine import detect_intent, needs_clarification, build_confirmation
 from report_generator import generate_report, get_reports_list, REPORTS_DIR
+from auto_update import check_for_updates, perform_update, check_update_background
+from msf_integration import detect_msf_intent, is_metasploit_available, run_msf_command
+from wordlists_manager import get_available_wordlists, create_greek_wordlist, get_best_wordlist, print_wordlists
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'doureios-ippos-2024'
@@ -793,6 +796,18 @@ socket.on('error_msg', data => {
   addSystemMessage(`<span class="red">⚠ ${data.message}</span>`);
 });
 
+socket.on('update_available', data => {
+  const msg = `🔔 <span class="gold">Νέα έκδοση διαθέσιμη!</span> (${data.commits_behind} αλλαγές)<br>
+    <em>${data.message}</em><br>
+    <button class="terminal-btn" onclick="performUpdate()" style="margin-top:6px">⬆ Ενημέρωση τώρα</button>`;
+  addSystemMessage(msg);
+});
+
+function performUpdate() {
+  addSystemMessage('🔄 Ενημέρωση σε εξέλιξη...');
+  socket.emit('perform_update');
+}
+
 // ── CONSENT ──
 function handleConsent(approved) {
   if (!pendingConsent) return;
@@ -1000,7 +1015,49 @@ def download_report():
 def handle_init():
     tools = check_tools()
     reports = get_reports_list()
-    emit('init_data', {'tools': tools, 'reports': reports})
+    wordlists = get_available_wordlists()
+    emit('init_data', {
+        'tools': tools,
+        'reports': reports,
+        'wordlists': list(wordlists.keys()),
+        'msf_available': is_metasploit_available(),
+    })
+    # Check for updates in background
+    def notify_update(result):
+        socketio.emit('update_available', {
+            'commits_behind': result['commits_behind'],
+            'message': result['message'],
+        })
+    check_update_background(callback=notify_update)
+
+@socketio.on('check_update')
+def handle_check_update():
+    result = check_for_updates()
+    emit('update_check_result', result)
+
+@socketio.on('perform_update')
+def handle_perform_update():
+    emit('system_message', {'message': '🔄 Ενημέρωση σε εξέλιξη...'})
+    result = perform_update()
+    if result['success']:
+        emit('system_message', {'message': f'<span class="green">✓ {result["message"]}</span><br>Επανεκκίνησε το σύστημα για τις αλλαγές.'})
+    else:
+        emit('error_msg', {'message': result['message']})
+
+@socketio.on('get_wordlists')
+def handle_get_wordlists():
+    wls = get_available_wordlists()
+    emit('wordlists_list', {'wordlists': wls})
+
+@socketio.on('create_wordlist')
+def handle_create_wordlist(data):
+    wl_type = data.get('type', 'greek')
+    if wl_type == 'greek':
+        path = create_greek_wordlist()
+        from wordlists_manager import _count_lines
+        lines = _count_lines(__import__('pathlib').Path(path))
+        emit('system_message', {'message': f'<span class="green">✓ Greek wordlist δημιουργήθηκε!</span><br>{path} ({lines} λέξεις)'})
+    emit('wordlists_list', {'wordlists': get_available_wordlists()})
 
 @socketio.on('get_reports')
 def handle_get_reports():
@@ -1098,6 +1155,34 @@ def handle_message(data):
             'description': desc,
             'result': result,
         })
+    elif intent_id == 'unknown':
+        # Check Metasploit intents
+        msf_intent = detect_msf_intent(text, target)
+        if msf_intent:
+            lang = result.get('language', 'el')
+            desc = msf_intent[f'desc_{lang}']
+            emit('consent_required', {
+                'action': f"msf_{msf_intent['id']}",
+                'target': target,
+                'description': f"Metasploit: {desc}",
+                'msf_intent': msf_intent['id'],
+                'result': {},
+            })
+        # Check wordlist intents
+        elif any(w in text.lower() for w in ['wordlist', 'λεξικο', 'λέξεις', 'passwords list', 'create wordlist']):
+            emit('scan_options', {
+                'action': 'wordlist',
+                'target': '',
+                'title': '📋 Τι wordlist θέλεις;',
+                'options': [
+                    'Greek wordlist — ελληνικές λέξεις & κωδικοί',
+                    'Δες διαθέσιμα wordlists',
+                ]
+            })
+        else:
+            emit('system_message', {
+                'message': f'Δεν κατάλαβα πλήρως. Δοκίμασε: <em>"σκάναρε το 192.168.1.1"</em> ή <em>"βοήθεια"</em>'
+            })
     else:
         confirm = build_confirmation(result)
         if confirm:
@@ -1296,6 +1381,25 @@ def handle_scan_option(data):
         descriptions = [f'Ενέργεια {choice}']
 
     desc = descriptions[choice-1] if choice <= len(descriptions) else descriptions[0]
+
+    if action == 'wordlist':
+        if choice == 1:
+            socketio.emit('system_message', {'message': '📋 Δημιουργία Greek wordlist...'})
+            from wordlists_manager import create_greek_wordlist, _count_lines
+            path = create_greek_wordlist()
+            lines = _count_lines(__import__('pathlib').Path(path))
+            emit('system_message', {'message': f'<span class="green">✓ Greek wordlist!</span><br>{path} ({lines} λέξεις)'})
+        elif choice == 2:
+            from wordlists_manager import get_available_wordlists
+            wls = get_available_wordlists()
+            if wls:
+                msg = '<strong>📋 Διαθέσιμα Wordlists:</strong><br>'
+                for name, info in list(wls.items())[:8]:
+                    msg += f'• {name} ({info["size"]}, {info["lines"]} γραμμές) [{info["type"]}]<br>'
+                emit('system_message', {'message': msg})
+            else:
+                emit('system_message', {'message': 'Δεν βρέθηκαν wordlists. Γράψε "δημιούργησε greek wordlist"'})
+        return
 
     emit('consent_required', {
         'action': action,
