@@ -1155,6 +1155,43 @@ def handle_message(data):
             'description': desc,
             'result': result,
         })
+    elif intent_id == 'wordlist':
+        emit('scan_options', {
+            'action': 'wordlist',
+            'target': '',
+            'title': '📋 Τι wordlist θέλεις;',
+            'options': [
+                'Greek wordlist — ελληνικές λέξεις & κωδικοί',
+                'Δες διαθέσιμα wordlists',
+            ]
+        })
+
+    elif intent_id == 'msf_scan':
+        msf_intent = detect_msf_intent(text, target)
+        if msf_intent:
+            desc = msf_intent[f'desc_{lang}']
+            emit('consent_required', {
+                'action': f"msf_{msf_intent['id']}",
+                'target': target,
+                'description': f"Metasploit: {desc}",
+                'msf_intent': msf_intent['id'],
+                'result': {},
+            })
+        else:
+            emit('scan_options', {
+                'action': 'msf_scan',
+                'target': target,
+                'title': f'🔴 Metasploit — Τι θέλεις να κάνω στο <span class="cyan">{target or "?"}</span>;',
+                'options': [
+                    'EternalBlue / MS17-010 check',
+                    'SMB version scan',
+                    'SSH version scan',
+                    'HTTP version scan',
+                    'FTP anonymous login check',
+                    'Port scan με Metasploit',
+                ]
+            })
+
     elif intent_id == 'unknown':
         # Check Metasploit intents
         msf_intent = detect_msf_intent(text, target)
@@ -1381,6 +1418,25 @@ def handle_scan_option(data):
         descriptions = [f'Ενέργεια {choice}']
 
     desc = descriptions[choice-1] if choice <= len(descriptions) else descriptions[0]
+
+    if action == 'msf_scan':
+        msf_map = {
+            1: ('ms17_010', 'EternalBlue MS17-010'),
+            2: ('smb_scan', 'SMB version scan'),
+            3: ('ssh_scan', 'SSH version scan'),
+            4: ('http_scan', 'HTTP version scan'),
+            5: ('ftp_anon', 'FTP anonymous login'),
+            6: ('msf_scan', 'Metasploit port scan'),
+        }
+        msf_id, desc = msf_map.get(choice, ('msf_scan', 'Metasploit scan'))
+        emit('consent_required', {
+            'action': f'msf_{msf_id}',
+            'target': target,
+            'description': f'Metasploit: {desc}',
+            'msf_intent': msf_id,
+            'result': {},
+        })
+        return
 
     if action == 'wordlist':
         if choice == 1:

@@ -241,6 +241,40 @@ INTENTS = [
         "clarify_en": None,
     },
     {
+        "id": "wordlist",
+        "el_patterns": [
+            r"wordlist", r"λεξικ", r"λιστ.*κωδικ", r"κωδικ.*λιστ",
+            r"δημιουργ.*wordlist", r"φτιαξ.*wordlist",
+            r"greek.*word", r"ελληνικ.*λεξ",
+        ],
+        "en_patterns": [
+            r"wordlist", r"word.*list", r"create.*wordlist",
+            r"generate.*wordlist", r"password.*list",
+            r"greek.*wordlist",
+        ],
+        "description_el": "Διαχείριση wordlists",
+        "description_en": "Wordlist management",
+        "needs_target": False,
+        "clarify_el": None,
+        "clarify_en": None,
+    },
+    {
+        "id": "msf_scan",
+        "el_patterns": [
+            r"metasploit", r"msf", r"eternalblue", r"ms17",
+            r"msfconsole", r"exploit",
+        ],
+        "en_patterns": [
+            r"metasploit", r"msf", r"eternalblue", r"ms17",
+            r"msfconsole", r"exploit",
+        ],
+        "description_el": "Metasploit scan/exploit",
+        "description_en": "Metasploit scan/exploit",
+        "needs_target": True,
+        "clarify_el": None,
+        "clarify_en": None,
+    },
+    {
         "id": "exit",
         "el_patterns": [
             r"έξοδ", r"εξοδ", r"αποχώρ", r"αποχωρ",
