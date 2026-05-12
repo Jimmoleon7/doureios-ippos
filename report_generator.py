@@ -93,7 +93,7 @@ def generate_report(
     # ── Styles ──
     title_style = ParagraphStyle("DI_Title",
         fontName=GREEK_FONT_BOLD, fontSize=24,
-        textColor=DARK_BLUE, alignment=TA_CENTER, spaceAfter=4)
+        textColor=DARK_BLUE, alignment=TA_CENTER, spaceAfter=16)
 
     subtitle_style = ParagraphStyle("DI_Subtitle",
         fontName=GREEK_FONT_BOLD, fontSize=13,
@@ -139,7 +139,7 @@ def generate_report(
             except Exception:
                 pass
     if not logo_added:
-        story.append(Spacer(1, 0.5*cm))
+        story.append(Spacer(1, 1.5*cm))
 
     story.append(Paragraph("ΔΟΥΡΕΙΟΣ ΙΠΠΟΣ", title_style))
     story.append(Paragraph("DOUREIOS IPPOS", subtitle_style))
@@ -260,7 +260,7 @@ def generate_report(
     else:
         story.append(Paragraph("Δεν εντοπίστηκαν ευρήματα / No specific findings detected.", normal_style))
 
-    story.append(Spacer(1, 0.5*cm))
+    story.append(Spacer(1, 1.5*cm))
 
     # ── FOOTER ──
     story.append(HRFlowable(width="100%", thickness=1, color=GOLD, spaceBefore=8))

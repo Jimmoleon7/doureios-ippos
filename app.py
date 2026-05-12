@@ -1356,6 +1356,33 @@ def execute_action(action: str, data: dict) -> tuple:
             "Password Attack Guide"
         )
 
+    elif action.startswith('msf_'):
+        msf_id = data.get('msf_intent', '')
+        if not msf_id:
+            msf_id = action.replace('msf_', '', 1)
+        if msf_id.startswith('msf_'):
+            msf_id = msf_id.replace('msf_', '', 1)
+        from msf_integration import (check_ms17_010, check_smb_vulns,
+            http_version_scan, ssh_version_scan, ftp_anonymous_login, scan_with_msf)
+        msf_map = {
+            'ms17_010': check_ms17_010,
+            'smb_scan': check_smb_vulns,
+            'smb': check_smb_vulns,
+            'http_scan': http_version_scan,
+            'http': http_version_scan,
+            'ssh_scan': ssh_version_scan,
+            'ssh': ssh_version_scan,
+            'ftp_anon': ftp_anonymous_login,
+            'ftp': ftp_anonymous_login,
+            'msf_scan': scan_with_msf,
+            'scan': scan_with_msf,
+        }
+        fn = msf_map.get(msf_id)
+        if fn and target:
+            output = fn(target)
+            return output, f"Metasploit: {msf_id} — {target}"
+        return f"[✗] Άγνωστη MSF ενέργεια: {msf_id}", "Metasploit"
+
     return f"[?] Άγνωστη ενέργεια: {action}", "Unknown"
 
 
