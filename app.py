@@ -17,7 +17,7 @@ from flask_socketio import SocketIO, emit
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent))
-from nlp_engine import detect_intent, needs_clarification, build_confirmation
+from nlp_engine import detect_intent, needs_clarification, build_confirmation, parse_multi_step, is_multi_step
 from report_generator import generate_report, get_reports_list, REPORTS_DIR
 from auto_update import check_for_updates, perform_update, check_update_background
 from msf_integration import detect_msf_intent, is_metasploit_available, run_msf_command
@@ -816,13 +816,7 @@ function handleConsent(approved) {
     addSystemMessage('<span class="green">✓ Εξουσιοδότηση επιβεβαιώθηκε. Εκτελώ...</span>');
     showTyping();
     document.getElementById('sendBtn').disabled = true;
-    socket.emit('consent_response', {
-      approved: true,
-      action: pendingConsent.action,
-      target: pendingConsent.target || '',
-      msf_intent: pendingConsent.msf_intent || '',
-      scan_choice: pendingConsent.scan_choice || 1,
-    });
+    socket.emit('consent_response', { approved: true, action: pendingConsent.action });
   } else {
     addSystemMessage('<span class="red">✗ Ακυρώθηκε.</span>');
     socket.emit('consent_response', { approved: false });
@@ -1075,11 +1069,69 @@ def handle_message(data):
     if not text:
         return
 
-    # NLP processing
+    # ── Multi-step command check ──
+    if is_multi_step(text):
+        steps = parse_multi_step(text)
+        if steps and len(steps) >= 2:
+            step_list = ""
+            for i, step in enumerate(steps, 1):
+                intent = step.get("intent")
+                desc = intent[f"description_{step.get('language','el')}"] if intent else step["intent_id"]
+                target = step.get("target", "")
+                step_list += f"<br>{i}. <span class='gold'>{desc}</span>"
+                if target:
+                    step_list += f" → <span class='cyan'>{target}</span>"
+            
+            emit('system_message', {
+                'message': f'🐴 Εντόπισα {len(steps)} ενέργειες:{step_list}<br><br>Θέλεις να τις εκτελέσω με τη σειρά;',
+                'type': 'clarify'
+            })
+            # Store steps for execution
+            session_data['pending_steps'] = steps
+            session_data['pending_steps_text'] = text
+            return
+
+    # ── Single command NLP processing ──
     result = detect_intent(text)
     intent_id = result['intent_id']
     lang = result['language']
     target = result['target']
+
+    # ── Handle multi-step confirmation ──
+    text_upper = text.strip().upper()
+    if text_upper in ("ΝΑΙ", "NAI", "YES", "Y", "ΝΑΙ!") and session_data.get('pending_steps'):
+        steps = session_data.pop('pending_steps', [])
+        session_data.pop('pending_steps_text', None)
+        
+        def run_steps():
+            for i, step in enumerate(steps, 1):
+                intent_id = step.get("intent_id", "unknown")
+                target = step.get("target", "")
+                lang = step.get("language", "el")
+                intent = step.get("intent")
+                desc = intent[f"description_{lang}"] if intent else intent_id
+                
+                socketio.emit('system_message', {
+                    'message': f'🐴 Βήμα {i}/{len(steps)}: <span class="gold">{desc}</span>'
+                })
+                
+                fake_data = {'target': target, 'scan_choice': 2, 'msf_intent': ''}
+                output, title = execute_action(intent_id, fake_data)
+                
+                if output:
+                    session_data['last_scan_output'] = output
+                    session_data['last_scan_type'] = title
+                    session_data['last_target'] = target
+                    socketio.emit('scan_output', {
+                        'title': title, 'output': output, 'scan_type': intent_id
+                    })
+            socketio.emit('system_message', {
+                'message': f'<span class="green">✓ Όλα τα βήματα ολοκληρώθηκαν!</span>'
+            })
+        
+        import threading
+        threading.Thread(target=run_steps, daemon=True).start()
+        return
 
     # Add to history
     session_data['history'].append({
@@ -1243,9 +1295,6 @@ def handle_consent(data):
 
     action = data.get('action', '')
     result = data.get('result', {})
-    # Preserve target from consent data
-    if 'target' not in data or not data.get('target'):
-        data['target'] = session_data.get('last_target', '')
 
     # Re-detect from stored session if needed
     # Execute in background thread
@@ -1365,68 +1414,61 @@ def execute_action(action: str, data: dict) -> tuple:
             "Password Attack Guide"
         )
 
-    elif action.startswith('msf_'):
-        msf_id = data.get('msf_intent', '')
-        if not msf_id:
-            msf_id = action.replace('msf_', '', 1)
-        if msf_id.startswith('msf_'):
-            msf_id = msf_id.replace('msf_', '', 1)
-        from msf_integration import (check_ms17_010, check_smb_vulns,
-            http_version_scan, ssh_version_scan, ftp_anonymous_login, scan_with_msf)
-        msf_map = {
-            'ms17_010': check_ms17_010,
-            'smb_scan': check_smb_vulns,
-            'smb': check_smb_vulns,
-            'http_scan': http_version_scan,
-            'http': http_version_scan,
-            'ssh_scan': ssh_version_scan,
-            'ssh': ssh_version_scan,
-            'ftp_anon': ftp_anonymous_login,
-            'ftp': ftp_anonymous_login,
-            'msf_scan': scan_with_msf,
-            'scan': scan_with_msf,
-        }
-        fn = msf_map.get(msf_id)
-        if fn and target:
-            output = fn(target)
-            return output, f"Metasploit: {msf_id} — {target}"
-        return f"[✗] Άγνωστη MSF ενέργεια: {msf_id}", "Metasploit"
-
     return f"[?] Άγνωστη ενέργεια: {action}", "Unknown"
 
 
 def get_help_html(lang='el'):
     if lang == 'el':
         return """
-<strong>🐴 Δούρειος Ίππος — Εντολές:</strong><br><br>
+<strong>🐴 Δούρειος Ίππος v4.0 — Εντολές:</strong><br><br>
 <span class="gold">[ Σάρωση Δικτύου ]</span><br>
-• "σκάναρε το 192.168.1.1"<br>
-• "βρες ανοιχτές πόρτες στο 10.0.0.5"<br><br>
+• "σκάναρε το 192.168.1.1" — nmap scan<br>
+• "vulnerability scan στο 10.0.0.5"<br><br>
 <span class="gold">[ Web Testing ]</span><br>
 • "κάνε web scan στο http://site.com"<br>
 • "τρέξε sqlmap στο http://site.com?id=1"<br><br>
-<span class="gold">[ Password ]</span><br>
-• "σπάσε τους κωδικούς"<br>
+<span class="gold">[ Password Attacks ]</span><br>
+• "σπάσε τους κωδικούς από το hashes.txt"<br>
 • "brute force ssh στο 192.168.1.5"<br><br>
+<span class="gold">[ Metasploit ]</span><br>
+• "metasploit 192.168.1.1" — επιλογή module<br>
+• "eternalblue 192.168.1.100" — MS17-010<br><br>
 <span class="gold">[ Recon ]</span><br>
 • "κάνε whois στο google.com"<br>
 • "dns lookup για target.com"<br><br>
+<span class="gold">[ Wordlists ]</span><br>
+• "wordlist" — δημιουργία/προβολή wordlists<br>
+• "greek wordlist" — ελληνικές λέξεις<br><br>
 <span class="gold">[ Reports ]</span><br>
-• "δημιούργησε report" — PDF από τελευταία σάρωση
+• "δημιούργησε report" — PDF αναφορά<br><br>
+<span class="gold">[ Σύνθετες Εντολές ]</span><br>
+• "σκάναρε το 192.168.1.1 και κάνε web scan"<br>
+• "nmap 10.0.0.1 και μετά vulnerability scan"
 """
     return """
-<strong>🐴 Doureios Ippos — Commands:</strong><br><br>
+<strong>🐴 Doureios Ippos v4.0 — Commands:</strong><br><br>
 <span class="gold">[ Network Scanning ]</span><br>
-• "scan 192.168.1.1"<br>
-• "find open ports on 10.0.0.5"<br><br>
+• "scan 192.168.1.1" — nmap scan<br>
+• "vulnerability scan 10.0.0.5"<br><br>
 <span class="gold">[ Web Testing ]</span><br>
 • "web scan http://site.com"<br>
 • "sqlmap http://site.com?id=1"<br><br>
+<span class="gold">[ Password Attacks ]</span><br>
+• "crack hashes.txt"<br>
+• "brute force ssh 192.168.1.5"<br><br>
+<span class="gold">[ Metasploit ]</span><br>
+• "metasploit 192.168.1.1" — choose module<br>
+• "eternalblue 192.168.1.100" — MS17-010<br><br>
 <span class="gold">[ Recon ]</span><br>
 • "whois google.com"<br>
 • "dns lookup target.com"<br><br>
+<span class="gold">[ Wordlists ]</span><br>
+• "wordlist" — create/view wordlists<br><br>
 <span class="gold">[ Reports ]</span><br>
-• "generate report" — PDF from last scan
+• "generate report" — PDF report<br><br>
+<span class="gold">[ Multi-step Commands ]</span><br>
+• "scan 192.168.1.1 and then web scan"<br>
+• "nmap 10.0.0.1 then vulnerability scan"
 """
 
 

@@ -466,3 +466,65 @@ if __name__ == "__main__":
             print(f"  Clarify: {clarify}")
         else:
             print(f"  Confirm: {build_confirmation(r)}")
+
+# ─────────────────────────────────────────────────────────────
+#  MULTI-STEP COMMAND PARSER
+#  Αναλύει σύνθετες εντολές πχ:
+#  "σκάναρε το 192.168.1.1 και μετά κάνε web scan"
+#  "brute force ssh στο 10.0.0.1 με rockyou"
+# ─────────────────────────────────────────────────────────────
+
+STEP_SEPARATORS = [
+    r"και μετά", r"κι μετά", r"and then", r"after that",
+    r"επίσης σκαν", r"επίσης κάνε", r"also scan", r"also run",
+    r" & ", r";",
+]
+
+def parse_multi_step(text: str) -> list:
+    """
+    Parse a multi-step command into individual steps.
+    Returns list of (text, intent_result) tuples.
+    "σκάναρε το 192.168.1.1 και κάνε web scan" →
+    [("σκάναρε το 192.168.1.1", nmap_result), ("κάνε web scan", web_result)]
+    """
+    import re as _re
+    
+    # Try to split on separators
+    parts = [text]
+    for sep in STEP_SEPARATORS:
+        new_parts = []
+        for part in parts:
+            split = _re.split(sep, part, flags=_re.IGNORECASE)
+            new_parts.extend([p.strip() for p in split if p.strip()])
+        parts = new_parts
+    
+    if len(parts) <= 1:
+        return None  # Not a multi-step command
+    
+    results = []
+    shared_target = extract_target(text)  # Try to get target from full text
+    
+    for part in parts:
+        if len(part) < 3:
+            continue
+        result = detect_intent(part)
+        # If no target in this part, use shared target
+        if not result.get("target") and shared_target:
+            result["target"] = shared_target
+        if result["intent_id"] != "unknown":
+            results.append(result)
+    
+    return results if len(results) > 1 else None
+
+
+def is_multi_step(text: str) -> bool:
+    """Quick check if text might be a multi-step command"""
+    import re as _re
+    for sep in STEP_SEPARATORS[:6]:  # Check main separators
+        if _re.search(sep, text, _re.IGNORECASE):
+            # Make sure it has at least 2 action words
+            result = detect_intent(text)
+            parts = parse_multi_step(text)
+            return parts is not None and len(parts) >= 2
+    return False
+
